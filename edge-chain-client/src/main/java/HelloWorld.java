@@ -91,7 +91,6 @@ public class HelloWorld extends Contract {
         return executeRemoteCallSingleValueReturn(function, byte[].class);
     }
 
-    @Deprecated
     public static HelloWorld load(String contractAddress, Web3j web3j, Credentials credentials, BigInteger gasPrice, BigInteger gasLimit) {
         return new HelloWorld(contractAddress, web3j, credentials, gasPrice, gasLimit);
     }

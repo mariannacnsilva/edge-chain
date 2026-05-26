@@ -43,8 +43,7 @@ module.exports = {
     // options below to some value.
     //
     development: {
-      //host: "127.0.0.1",     // Localhost (default: none)
-      host: "192.168.0.19",
+      host: "127.0.0.1", 
       port: 7545,            // Standard Ethereum port (default: none)
       gas: 1061396,           // Gas sent with each transaction (default: ~6700000)
       network_id: "*",       // Any network (default: none)
@@ -87,15 +86,14 @@ module.exports = {
   // Configure your compilers
   compilers: {
     solc: {
-      // version: "0.5.7",    // Fetch exact version from solc-bin (default: truffle's version)
-      // docker: true,        // Use "0.5.1" you've installed locally with docker (default: false)
-      // settings: {          // See the solidity docs for advice about optimization and evmVersion
-      //  optimizer: {
-      //    enabled: false,
-      //    runs: 200
-      //  },
-      //  evmVersion: "byzantium"
-      // }
+      version: "0.5.16",      // Versão compatível com ambos os contratos
+      settings: {
+        optimizer: {
+          enabled: true,      // Ativar otimização
+          runs: 200           // Número de runs de otimização
+        },
+        evmVersion: "byzantium"  // Versão do EVM compatível
+      }
     }
   }
 }
