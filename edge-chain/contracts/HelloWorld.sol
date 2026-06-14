@@ -1,4 +1,5 @@
-pragma solidity >=0.5.2 <0.6.0;
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.0;
 
 contract HelloWorld {
 
@@ -24,7 +25,7 @@ contract HelloWorld {
     }
     
     function setVersion(uint256 _version) public returns(bool success) {
-        require(_version > version, "La versión debe ser superior.");
+        require(_version > version, "La version debe ser superior.");
         version = _version;
         return true;
     }

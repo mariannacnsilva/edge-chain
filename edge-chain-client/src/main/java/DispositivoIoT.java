@@ -10,7 +10,7 @@ public class DispositivoIoT implements Runnable{
     // Configurações do Dispositivo
     private int dispositivoId;
     private Web3j web3j;
-    private HelloWorld contrato;
+    private EdgeChain contrato;
     private Credentials credenciais;
     private boolean ativo;
 
@@ -31,23 +31,22 @@ public class DispositivoIoT implements Runnable{
     private int totalAlertas;
     private int totalSincronizacoes;
     private long ultimaSincronizacao;
+    private GerenciadorDispositivos gerenciador;
 
-    public DispositivoIoT(int dispositivoId, Web3j web3j, Credentials credenciais, String contratoAddr, long intervaloLeituraMs) {
+    public DispositivoIoT(int dispositivoId, Web3j web3j, Credentials credenciais, String contratoAddr, long intervaloLeituraMs, GerenciadorDispositivos gerenciador) {
         this.dispositivoId = dispositivoId;
         this.credenciais = credenciais;
         this.web3j = web3j;
         this.intervaloLeituraMs = intervaloLeituraMs;
-        this.contrato = HelloWorld.load(contratoAddr, web3j, credenciais, 
+        this.contrato = EdgeChain.load(contratoAddr, web3j, credenciais, 
             BigInteger.valueOf(20_000_000_000L), 
             BigInteger.valueOf(300_000));
+        this.gerenciador = gerenciador;
 
-        // Inicializar sensor com valores realistas
         this.random = new Random();
-        this.temperaturaBase = 20.0 + (random.nextDouble() * 10); // 20-30ºC
+        this.temperaturaBase = 20.0 + (random.nextDouble() * 10);
         this.temperaturaAtual = this.temperaturaBase;
-        this.variacaoMaxima = 0.5; // ±0.5ºC por leitura
-        
-        // Estatísticas
+        this.variacaoMaxima = 0.5;
         this.totalLeituras = 0;
         this.totalAlertas = 0;
         this.totalSincronizacoes = 0;
@@ -135,9 +134,8 @@ public class DispositivoIoT implements Runnable{
 
     private void realizarPing() throws Exception {
         try {
-            byte[] response = contrato.hi().send();
-            String status = new String(response).trim();
-            System.out.println("[Dispositivo " + dispositivoId + "]: Ping enviado - Status: " + status);
+            BigInteger version = contrato.getVersion().send();
+            System.out.println("[Dispositivo " + dispositivoId + "]: Ping enviado - Versão EdgeChain: " + version);
         } catch (Exception e) {
             System.out.println("[Dispositivo " + dispositivoId + "]: Falha no ping: " + e.getMessage());
         }
@@ -160,33 +158,32 @@ public class DispositivoIoT implements Runnable{
     private void atualizarFirmware() throws Exception {
         try {
             BigInteger versaoAtual = contrato.getVersion().send();
-            BigInteger novaVersao = versaoAtual.add(BigInteger.ONE);
+            BigInteger novaVersao = BigInteger.valueOf(5).max(versaoAtual.add(BigInteger.ONE));
             
-            System.out.println("[Dispositivo " + dispositivoId + "]: Atualizando firmware de " + versaoAtual + " para " + novaVersao);
+            System.out.println("[Dispositivo " + dispositivoId + "]: Atualizando versão de " + versaoAtual + " para " + novaVersao);
             
-            TransactionReceipt receipt = contrato.setVersion(novaVersao).send();
+            TransactionReceipt result = contrato.changeVersion(novaVersao).send();
             
-            if (receipt.getStatus().equals("0x1")) {
-                System.out.println("[Dispositivo " + dispositivoId + "]: Firmware atualizado! Hash: " + receipt.getTransactionHash().substring(0, 10) + "... Gas: " + receipt.getGasUsed());
+            if (result.equals(BigInteger.ZERO)) {
+                System.out.println("[Dispositivo " + dispositivoId + "]: Versão atualizada com sucesso para " + novaVersao);
+            } else if (result.equals(BigInteger.ONE)) {
+                System.out.println("[Dispositivo " + dispositivoId + "]: Versão deve ser >= 5 (retorno: 1)");
             } else {
-                System.out.println("[Dispositivo " + dispositivoId + "]: Falha na atualização de firmware");
+                System.out.println("[Dispositivo " + dispositivoId + "]: Erro na atualização (retorno: " + result + ")");
             }
             
+            gerenciador.registrarTransacao();
         } catch (Exception e) {
-            if (e.getMessage().contains("superior")) {
-                System.out.println("[Dispositivo " + dispositivoId + "]: Versão já é a mais recente");
-            } else {
-                System.out.println("[Dispositivo " + dispositivoId + "]: Erro na atualização: " + e.getMessage());
-            }
+            System.out.println("[Dispositivo " + dispositivoId + "]: Erro na atualização: " + e.getMessage());
         }
     }
 
     private void consultarHistorico() throws Exception {
         try {
-            BigInteger totalOps = contrato.getHellonum().send();
-            System.out.println("[Dispositivo " + dispositivoId + "]: Histórico - Total de eventos registrados: " + totalOps);
+            BigInteger balance = contrato.getUserBalance().send();
+            System.out.println("[Dispositivo " + dispositivoId + "]: Saldo da conta: " + balance + " wei");
         } catch (Exception e) {
-            System.out.println("[Dispositivo " + dispositivoId + "]: Erro ao consultar histórico: " + e.getMessage());
+            System.out.println("[Dispositivo " + dispositivoId + "]: Erro ao consultar saldo: " + e.getMessage());
         }
     }
 
@@ -209,12 +206,11 @@ public class DispositivoIoT implements Runnable{
     private void enviarAlerta(String tipoAlerta) throws Exception {
         try {
             System.out.println("[Dispositivo " + dispositivoId + "]: ALERTA " + tipoAlerta + " detectado! Temp: " + String.format("%.2f°C", temperaturaAtual));
+            TransactionReceipt gasUsado = contrato.any_operation(contrato.getVersion().send()).send();
             
-            // Registra alerta no blockchain (hinofree - transação com custo)
-            TransactionReceipt receipt = contrato.hinofree().send();
+            System.out.println("[Dispositivo " + dispositivoId + "]: Alerta registrado no EdgeChain - Gas usado: " + gasUsado);
             
-            System.out.println("[Dispositivo " + dispositivoId + "]: Alerta enviado ao blockchain - Gas usado: "+ receipt.getGasUsed() +", Status: " + receipt.getStatus());
-            
+            gerenciador.registrarTransacao();
             totalAlertas++;
             
         } catch (Exception e) {

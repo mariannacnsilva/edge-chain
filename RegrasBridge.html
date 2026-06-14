@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Regras do Contrato Bridge</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        @media print {
+            body { margin: 0; }
+            .page-break { page-break-after: always; }
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            padding: 40px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.1);
+        }
+        
+        h1 {
+            color: #1f4788;
+            text-align: center;
+            font-size: 32px;
+            margin-bottom: 10px;
+            border-bottom: 3px solid #1f4788;
+            padding-bottom: 15px;
+        }
+        
+        .subtitle {
+            text-align: center;
+            color: #666;
+            font-size: 12px;
+            margin-bottom: 10px;
+        }
+        
+        .date {
+            text-align: left;
+            color: #666;
+            font-size: 11px;
+            margin-bottom: 30px;
+        }
+        
+        h2 {
+            color: #2c5aa0;
+            font-size: 16px;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            padding: 8px 12px;
+            background: #f0f4f8;
+            border-left: 4px solid #2c5aa0;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+            font-size: 11px;
+        }
+        
+        th {
+            background: #2c5aa0;
+            color: white;
+            padding: 10px;
+            text-align: left;
+            font-weight: bold;
+        }
+        
+        td {
+            padding: 10px;
+            border: 1px solid #ddd;
+        }
+        
+        tr:nth-child(even) {
+            background: #f9f9f9;
+        }
+        
+        tr:hover {
+            background: #f0f4f8;
+        }
+        
+        .code-block {
+            background: #f5f5f5;
+            border: 1px solid #ddd;
+            padding: 12px;
+            margin: 15px 0;
+            font-family: 'Courier New', monospace;
+            font-size: 10px;
+            overflow-x: auto;
+        }
+        
+        .example-ok {
+            background: #e8f5e9;
+            border: 1px solid #4caf50;
+            padding: 12px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+        
+        .example-fail {
+            background: #ffebee;
+            border: 1px solid #f44336;
+            padding: 12px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+        
+        .flow-diagram {
+            background: #f9f9f9;
+            border: 2px solid #2c5aa0;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+            font-size: 11px;
+        }
+        
+        .flow-diagram div {
+            margin: 8px 0;
+            padding-left: 20px;
+        }
+        
+        ul {
+            margin-left: 20px;
+            font-size: 11px;
+        }
+        
+        li {
+            margin-bottom: 8px;
+        }
+        
+        .page-break {
+            margin: 40px 0;
+            border-top: 2px dashed #ccc;
+            padding-top: 40px;
+        }
+        
+        .security-section {
+            background: #fff3e0;
+            border-left: 4px solid #d32f2f;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        
+        .footer {
+            text-align: center;
+            color: #999;
+            font-size: 10px;
+            margin-top: 40px;
+            border-top: 1px solid #ddd;
+            padding-top: 15px;
+        }
+        
+        .important {
+            background: #fffde7;
+            border-left: 4px solid #fbc02d;
+            padding: 10px;
+            margin: 15px 0;
+            font-size: 11px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>REGRAS DO CONTRATO BRIDGE</h1>
+        <div class="subtitle">Documento Técnico - Sincronização Side Chain ↔ Main Chain</div>
+        <div class="date"><strong>Data:</strong> 26 de May de 2026</div>
+
+        <h2>1. REGRAS DE SUBMISSÃO DE BATCHES</h2>
+        <table>
+            <tr>
+                <th>Regra</th>
+                <th>Descrição</th>
+            </tr>
+            <tr>
+                <td><strong>State Hash ≠ 0</strong></td>
+                <td>Não pode submeter um hash vazio (bytes32(0))</td>
+            </tr>
+            <tr>
+                <td><strong>Block Height > 0</strong></td>
+                <td>A altura do bloco deve ser um número positivo</td>
+            </tr>
+            <tr>
+                <td><strong>Apenas Validadores</strong></td>
+                <td>Apenas endereços com permissão de validador podem submeter batches</td>
+            </tr>
+            <tr>
+                <td><strong>Apenas Owner configura</strong></td>
+                <td>Apenas o owner pode adicionar/remover validadores</td>
+            </tr>
+        </table>
+
+        <h2>2. REGRAS DE VALIDADORES</h2>
+        <table>
+            <tr>
+                <th>Regra</th>
+                <th>Detalhe</th>
+            </tr>
+            <tr>
+                <td><strong>Owner é validador padrão</strong></td>
+                <td>Na construção, o owner recebe automaticamente permissão</td>
+            </tr>
+            <tr>
+                <td><strong>Não duplicar validadores</strong></td>
+                <td>Não pode adicionar um endereço que já é validador</td>
+            </tr>
+            <tr>
+                <td><strong>Endereço válido</strong></td>
+                <td>Não pode usar endereço 0x0</td>
+            </tr>
+            <tr>
+                <td><strong>Não remover owner</strong></td>
+                <td>O owner nunca pode ser removido como validador</td>
+            </tr>
+        </table>
+
+        <h2>3. REGRAS DE CONSENSO MULTI-VALIDADOR</h2>
+        <table>
+            <tr>
+                <th>Regra</th>
+                <th>Detalhe</th>
+            </tr>
+            <tr>
+                <td><strong>Mínimo 2 validadores</strong></td>
+                <td>Precisa de acordo de pelo menos 2 validadores</td>
+            </tr>
+            <tr>
+                <td><strong>Todos devem ser validadores</strong></td>
+                <td>Todos os endereços passados devem estar cadastrados</td>
+            </tr>
+            <tr>
+                <td><strong>Sem duplicação</strong></td>
+                <td>A mesma validação não usa duplicatas</td>
+            </tr>
+        </table>
+
+        <h2>4. REGRAS DE INTEGRIDADE DE DADOS</h2>
+        <table>
+            <tr>
+                <th>Regra</th>
+                <th>Detalhe</th>
+            </tr>
+            <tr>
+                <td><strong>Histórico imutável</strong></td>
+                <td>Uma vez ancorado, o batch não pode ser alterado</td>
+            </tr>
+            <tr>
+                <td><strong>Cada batch tem ID único</strong></td>
+                <td>batchCounter incrementa automaticamente</td>
+            </tr>
+            <tr>
+                <td><strong>Rastreamento por submitter</strong></td>
+                <td>Cada validador tem registro do seu último batch</td>
+            </tr>
+            <tr>
+                <td><strong>Timestamp automático</strong></td>
+                <td>Usa block.timestamp da blockchain (não manipulável)</td>
+            </tr>
+        </table>
+
+        <h2>5. REGRAS DE ESTADO DO CONTRATO</h2>
+        <table>
+            <tr>
+                <th>Variável</th>
+                <th>Regra</th>
+            </tr>
+            <tr>
+                <td><strong>batchCounter</strong></td>
+                <td>Sempre incrementa após submissão (nunca volta para trás)</td>
+            </tr>
+            <tr>
+                <td><strong>ultimoBatchSubmitter</strong></td>
+                <td>Mapeia cada validador ao seu último batch</td>
+            </tr>
+            <tr>
+                <td><strong>helloWorldMainChain</strong></td>
+                <td>Pode ser atualizado apenas pelo owner</td>
+            </tr>
+        </table>
+
+        <h2>6. REGRAS DE CONSULTA (View Functions)</h2>
+        <table>
+            <tr>
+                <th>Função</th>
+                <th>Regra</th>
+            </tr>
+            <tr>
+                <td><strong>obterBatch()</strong></td>
+                <td>Apenas pode consultar batches que existem (ID &lt; batchCounter)</td>
+            </tr>
+            <tr>
+                <td><strong>validarBatch()</strong></td>
+                <td>Verifica se estado hash e block height correspondem</td>
+            </tr>
+            <tr>
+                <td><strong>estaAncorado()</strong></td>
+                <td>Verifica se um state hash foi registrado alguma vez</td>
+            </tr>
+        </table>
+
+        <h2>7. REGRAS DE EVENTOS (Auditoria)</h2>
+        <table>
+            <tr>
+                <th>Evento</th>
+                <th>Quando ocorre</th>
+            </tr>
+            <tr>
+                <td><strong>BatchAncorado</strong></td>
+                <td>Toda vez que um batch é submetido com sucesso</td>
+            </tr>
+            <tr>
+                <td><strong>ValidadorAdicionado</strong></td>
+                <td>Quando owner adiciona novo validador</td>
+            </tr>
+            <tr>
+                <td><strong>ValidadorRemovido</strong></td>
+                <td>Quando owner remove um validador</td>
+            </tr>
+        </table>
+
+        <div class="page-break"></div>
+
+        <h2>8. FLUXO DE VALIDAÇÃO</h2>
+        <div class="flow-diagram">
+            <strong>Ordem de Validação para Submissão de Batch:</strong>
+            <div>1. ✓ msg.sender é validador? → Se NÃO: REJEITA</div>
+            <div>2. ✓ stateHash ≠ 0x0? → Se NÃO: REJEITA</div>
+            <div>3. ✓ blockHeight > 0? → Se NÃO: REJEITA</div>
+            <div>4. ✓ ACEITA E REGISTRA:</div>
+            <div style="margin-left: 40px;">
+                • Armazena em mapping<br>
+                • Incrementa batchCounter<br>
+                • Emite evento BatchAncorado
+            </div>
+        </div>
+
+        <h2>9. EXEMPLOS DE CENÁRIOS</h2>
+        <h3 style="color: #4caf50; margin-top: 15px;">✅ ACEITO:</h3>
+        <div class="example-ok">
+            <code>submeterBatch(<br>
+&nbsp;&nbsp;&nbsp;&nbsp;0xabc123...,  // ≠ 0<br>
+&nbsp;&nbsp;&nbsp;&nbsp;100,          // > 0<br>
+&nbsp;&nbsp;&nbsp;&nbsp;50            // Transações<br>
+);<br>
+<strong>Resultado:</strong> Batch ID 0 criado, evento emitido</code>
+        </div>
+
+        <h3 style="color: #f44336; margin-top: 15px;">❌ REJEITADO:</h3>
+        <div class="example-fail">
+            <code>// Não-validador tenta submeter<br>
+submeterBatch(0xabc123..., 100, 50);<br>
+<strong>Erro:</strong> "Apenas validadores podem submeter batches"<br>
+<br>
+// State hash vazio<br>
+submeterBatch(0x0, 100, 50);<br>
+<strong>Erro:</strong> "State hash não pode ser vazio"<br>
+<br>
+// Block height inválido<br>
+submeterBatch(0xabc123..., 0, 50);<br>
+<strong>Erro:</strong> "Block height deve ser positivo"</code>
+        </div>
+
+        <h2>10. SEGURANÇA DO CONTRATO</h2>
+        <table>
+            <tr>
+                <th>Aspecto</th>
+                <th>Como é garantido</th>
+            </tr>
+            <tr>
+                <td><strong>Imutabilidade</strong></td>
+                <td>Dados armazenados em mapping, não podem ser alterados</td>
+            </tr>
+            <tr>
+                <td><strong>Autorização</strong></td>
+                <td>Modifiers (apenasOwner, validadorRequerido)</td>
+            </tr>
+            <tr>
+                <td><strong>Auditoria</strong></td>
+                <td>Eventos registram tudo na blockchain</td>
+            </tr>
+            <tr>
+                <td><strong>Consenso</strong></td>
+                <td>Função alternativa requer 2+ validadores</td>
+            </tr>
+            <tr>
+                <td><strong>Rastreabilidade</strong></td>
+                <td>Cada batch armazena quem submeteu e quando</td>
+            </tr>
+        </table>
+
+        <div class="important">
+            <strong>Conclusão:</strong> Estas regras garantem que <strong>apenas entidades autorizadas possam ancorar batches</strong> 
+            e que <strong>nada possa ser falsificado após registro</strong>. A imutabilidade e auditoria são garantidas pela natureza 
+            da blockchain, criando um sistema de sincronização confiável e resistente a manipulações.
+        </div>
+
+        <div class="footer">
+            Edge-Chain Project - TCC | Documento gerado em 26/05/2026
+        </div>
+    </div>
+
+    <script>
+        // Permitir imprimir para PDF facilmente (Ctrl+P no navegador)
+        console.log("Para salvar como PDF: Pressione Ctrl+P ou Cmd+P e escolha 'Salvar como PDF'");
+    </script>
+</body>
+</html>

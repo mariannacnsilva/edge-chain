@@ -33,7 +33,7 @@ public class Client {
         // Teste se o contrato existe
         String code;
         try {
-            code = web3j.ethGetCode("0xE5dE808CDb89656AcC3aeCC3433310aE1a897D4A", DefaultBlockParameterName.LATEST).send().getCode();
+            code = web3j.ethGetCode("0xdE7d61F1cD60779F5B70D78Ae1bFD3dA8e36bebc", DefaultBlockParameterName.LATEST).send().getCode();
             System.out.println("Código do contrato: " + code);
             if (code.equals("0x")) {
                 System.out.println("ERRO: Contrato não existe neste endereço!");
@@ -43,7 +43,7 @@ public class Client {
         }
 
         HelloWorld helloWorldContract = HelloWorld.load(
-            "0xE5dE808CDb89656AcC3aeCC3433310aE1a897D4A",
+            "0xdE7d61F1cD60779F5B70D78Ae1bFD3dA8e36bebc",
              web3j, 
              credentials, 
              BigInteger.valueOf(20_000_000_000L), 
@@ -51,7 +51,7 @@ public class Client {
         System.out.println("Contract loaded.\n");
 
         EdgeChain edgeChainContract = EdgeChain.load(
-            "0x47C3f901C221cB2D95a2BC773270D9faB75bE35E",
+            "0x31E8133DBe8bae67BA25a359244Fb4520A89efA2",
              web3j, 
              credentials, 
              BigInteger.valueOf(20_000_000_000L), 

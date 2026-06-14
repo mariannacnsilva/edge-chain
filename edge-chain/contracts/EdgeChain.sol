@@ -1,4 +1,5 @@
-pragma solidity >=0.4.22 <0.6.0;
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.0;
 
 contract EdgeChain {
     
@@ -19,12 +20,12 @@ contract EdgeChain {
     }
     
     mapping (address => Device) private devs;
-    address payable[] private dev_add;
+    address[] private dev_add;
     uint256 private last_pay_block = 0;
     uint256 private last_sec_block = 0;
     uint256 private version = 0;
     
-    function () external payable{}
+    receive() external payable{}
     
     function getBalance() public view returns (uint256){
         return address(this).balance;
@@ -82,7 +83,7 @@ contract EdgeChain {
                 if(devs[dev_add[i]].gas_used > 0){
                     uint256 gasToSend = devs[dev_add[i]].gas_used/devs[dev_add[i]].penalty;
                     devs[dev_add[i]].gas_used = 0;
-                    dev_add[i].transfer(gasToSend + 5537);
+                    payable(dev_add[i]).transfer(gasToSend + 5537);
                     //sumar gas used
                 }
             }
