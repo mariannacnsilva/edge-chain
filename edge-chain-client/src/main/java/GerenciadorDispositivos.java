@@ -1,3 +1,4 @@
+import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
@@ -8,62 +9,81 @@ import java.util.concurrent.TimeUnit;
 
 import org.web3j.crypto.Credentials;
 import org.web3j.protocol.Web3j;
+import org.web3j.protocol.core.DefaultBlockParameterName;
 import org.web3j.protocol.core.methods.response.TransactionReceipt;
 import org.web3j.protocol.http.HttpService;
-import org.web3j.utils.Numeric;
+import org.web3j.tx.RawTransactionManager;
+import org.web3j.tx.Transfer;
+import org.web3j.utils.Convert;
 
+ 
 public class GerenciadorDispositivos {
     private ExecutorService executor;
     private List<DispositivoIoT> dispositivos;
 
     // Dual Chain
     private ScheduledExecutorService schedulerSincronizacao;
-    private Web3j sideChainWeb3j;      // Para dispositivos
-    private Web3j mainChainWeb3j;      // Para bridge/anchor
+    private Web3j sideChainWeb3j;  
+    private Web3j mainChainWeb3j;
     private String sideChainContratoAddr;
     private String mainChainContratoAddr;
-    private long intervaloOperacoes;
     private long intervaloSincronizacao;
-    private Bridge bridgeContract;
-    private Credentials credenciaisBridge;
+    private Credentials credenciaisRelayer;
 
-    
-    // Estatísticas de batching
+    // Contratos usados pelo RELAYER
+    private EdgechainMain mainContract;
+    private EdgechainRegulator reguladorRelay;
+
+    // Estatísticas
     private volatile int contadorTransacoes = 0;
-    private volatile int contadorBatches = 0;
+    private volatile int contadorRelays = 0;
+    private volatile int contadorCriticos = 0;
 
-    // Preenchimento das chaves privadas de acordo com o fornecimento da rede blockchain ganache local
+    private final MetricasExecucao metricas = new MetricasExecucao();
+
+    public MetricasExecucao getMetricas() { return metricas;}
+
+    // Preenchimento das chaves privadas de acordo com o fornecimento da rede sidechain
     private static final String[] PRIVATE_KEYS = {
-        "0xedaa1c3aa2507c0056058b08694ed82ca8ec0ef8ab949ccfbabb5bd27da73f7e", // Dispositivo 0
-        "0xf31c6a902cc0d227ef71bfd6a4b5c0958e30525b90770a556cec18f9686763e2", // Dispositivo 1
-        "0x308be3c4f07c2a93dadc856af89ca4c52c3758b2066239ff79c310d13bdfb90a", // Dispositivo 2
-        "0xd29ac3e4974488d36c16a9ab2e501bef2ecffcfdb70afdb27a79e39534a0ee9e", // Dispositivo 3
-        "0x155bfa1882c97927ee3e7b2feb9e4169ce1b53443e6aee7000f47798a2fe84ec", // Dispositivo 4
+        "0xca9dbf37cf7472ca6461c05bc061d67f85e11e3702c6bbfe6deaf21fd58d5ef7", // Dispositivo 0
+        "0x6a161eaf586742309431f73c18d1affe8dd7f0d9a8e3e354d90a9cff3cfc9841", // Dispositivo 1
+        "0x12e8e566ab0ee525c3650f8d8a3352c15489b3244a58e6129193339d88126aa0", // Dispositivo 2
+        "0xebec49d21d31289e7d0858c5c985d925ef6f5bc4653bb902fc9290f76d5b293c", // Dispositivo 3
+        "0x167876a201aa1413eeb00e111d6e2a3ef6f73bdc7bb4deec6dc3386eb390a1da", // Dispositivo 4
     };
 
-    public GerenciadorDispositivos(String sideChainRpcUrl, String mainChainRpcUrl, 
+    public GerenciadorDispositivos(String sideChainRpcUrl, String mainChainRpcUrl,
                                    String sideChainContratoAddr, String mainChainContratoAddr,
-                                   long intervaloOperacoes, long intervaloSincronizacao, Credentials credenciaisBridge) {
-        
-        // Inicializar conexões com ambas as chains
+                                  long intervaloSincronizacao, Credentials credenciaisRelayer) {
+
+        // Inicializar conexões com as chains
         this.sideChainWeb3j = Web3j.build(new HttpService(sideChainRpcUrl));
         this.mainChainWeb3j = Web3j.build(new HttpService(mainChainRpcUrl));
-        
+
         this.sideChainContratoAddr = sideChainContratoAddr;
         this.mainChainContratoAddr = mainChainContratoAddr;
         this.executor = Executors.newFixedThreadPool(5);
         this.schedulerSincronizacao = Executors.newScheduledThreadPool(1);
         this.dispositivos = new ArrayList<>();
-        this.intervaloOperacoes = intervaloOperacoes;
         this.intervaloSincronizacao = intervaloSincronizacao;
-        this.credenciaisBridge = credenciaisBridge;
+        this.credenciaisRelayer = credenciaisRelayer;
 
         verificarConexoes();
 
-        this.bridgeContract = Bridge.load(
-            mainChainContratoAddr, 
-            mainChainWeb3j, 
-            credenciaisBridge,
+        // Contrato principal (mainchain)
+        this.mainContract = EdgechainMain.load(
+            mainChainContratoAddr,
+            mainChainWeb3j,
+            credenciaisRelayer,
+            BigInteger.valueOf(20_000_000_000L),
+            BigInteger.valueOf(500_000)
+        );
+
+        // Regulador (sidechain)
+        this.reguladorRelay = EdgechainRegulator.load(
+            sideChainContratoAddr,
+            sideChainWeb3j,
+            credenciaisRelayer,
             BigInteger.valueOf(20_000_000_000L),
             BigInteger.valueOf(500_000)
         );
@@ -74,21 +94,55 @@ public class GerenciadorDispositivos {
             String sideChainVersion = sideChainWeb3j.web3ClientVersion().send().getWeb3ClientVersion();
             String mainChainVersion = mainChainWeb3j.web3ClientVersion().send().getWeb3ClientVersion();
 
-            System.out.println("Side Chain conectada: " + sideChainVersion);
-            System.out.println("Main Chain conectada: " + mainChainVersion);
+            System.out.println("Side Chain (Regulador) conectada: " + sideChainVersion);
+            System.out.println("Main Chain (Principal) conectada: " + mainChainVersion);
         } catch (Exception e) {
             System.err.println("Erro na conexão: " + e.getMessage());
             System.exit(1);
         }
     }
 
+    public void financiarContrato() {
+        try {
+            Credentials funder = Credentials.create(PRIVATE_KEYS[0]);
+
+            BigInteger saldoFunder = sideChainWeb3j.ethGetBalance(funder.getAddress(), DefaultBlockParameterName.LATEST).send().getBalance();
+            BigInteger saldoContratoAntes = sideChainWeb3j.ethGetBalance(sideChainContratoAddr, DefaultBlockParameterName.LATEST).send().getBalance();
+            System.out.println("Financiando REGULADOR (sidechain) " + sideChainContratoAddr + " com 1 ETHER a partir de " + funder.getAddress() + "...");
+            System.out.println("  Saldo do funder     : " + Convert.fromWei(new BigDecimal(saldoFunder), Convert.Unit.ETHER) + " ETH");
+            System.out.println("  Saldo do regulador  : " + Convert.fromWei(new BigDecimal(saldoContratoAntes), Convert.Unit.ETHER) + " ETH (antes)");
+
+            if (saldoFunder.compareTo(Convert.toWei(BigDecimal.ONE, Convert.Unit.ETHER).toBigInteger()) < 0) {
+                System.err.println("  [ATENCAO] Funder tem menos de 1 ETH; o financiamento pode falhar e o payout do regulador vai reverter.");
+            }
+
+            Transfer transfer = new Transfer(sideChainWeb3j, new RawTransactionManager(sideChainWeb3j, funder));
+            TransactionReceipt receipt = transfer.sendFunds(
+                sideChainContratoAddr, BigDecimal.ONE, Convert.Unit.ETHER,
+                BigInteger.valueOf(20_000_000_000L), // gasPrice: 20 gwei
+                BigInteger.valueOf(100_000L) // gasLimit
+            ).send();
+
+            BigInteger saldoContratoDepois = sideChainWeb3j.ethGetBalance(sideChainContratoAddr, DefaultBlockParameterName.LATEST).send().getBalance();
+            System.out.println("Regulador financiado. tx=" + receipt.getTransactionHash()
+                + " | saldo do regulador agora: " + Convert.fromWei(new BigDecimal(saldoContratoDepois), Convert.Unit.ETHER) + " ETH");
+
+            if (saldoContratoDepois.signum() == 0) {
+                System.err.println("  [ERRO] Regulador continua com saldo 0 apos o financiamento — o payout (transfer) vai reverter e a execucao vai parar cedo.");
+            }
+        } catch (Exception e) {
+            System.err.println("[ERRO] Falha ao financiar o regulador (o payout vai reverter e a dualchain vai parar cedo): " + e.getMessage());
+        }
+    }
+
     public void iniciarDispositivos() {
-        System.out.println("\n=== Iniciando 5 Dispositivos IoT ===\n");
-        
+        System.out.println("\n=== Iniciando 5 Dispositivos IoT (DUALCHAIN) ===\n");
+
         for (int i = 0; i < 5; i++) {
             try {
                 Credentials credenciais = Credentials.create(PRIVATE_KEYS[i]);
-                DispositivoIoT dispositivo = new DispositivoIoT(i, sideChainWeb3j, credenciais, sideChainContratoAddr, intervaloOperacoes, this);
+                boolean malicioso = (i == 4);
+                DispositivoIoT dispositivo = new DispositivoIoT(i, sideChainWeb3j, credenciais, sideChainContratoAddr, this, malicioso);
                 dispositivos.add(dispositivo);
                 executor.submit(dispositivo);
                 System.out.println("Dispositivo-" + i + " iniciado com: " + credenciais.getAddress());
@@ -109,13 +163,13 @@ public class GerenciadorDispositivos {
         try {
             if (!executor.awaitTermination(30, TimeUnit.SECONDS)) executor.shutdownNow();
             if (!schedulerSincronizacao.awaitTermination(10, TimeUnit.SECONDS)) schedulerSincronizacao.shutdownNow();
-        
+
         } catch (InterruptedException e) {
             executor.shutdownNow();
             schedulerSincronizacao.shutdownNow();
         }
     }
-    
+
     public void monitorarDuracao(long durationSeconds) {
         try {
             Thread.sleep(durationSeconds * 1000);
@@ -126,89 +180,73 @@ public class GerenciadorDispositivos {
         pararDispositivos();
     }
 
+    public synchronized boolean encaminharParaMainchain(String deviceAddress, long operationType,
+                                                        BigInteger temperature, BigInteger timestamp) {
+        try {
+            // --- MAINCHAIN: executa a operacao definitiva ---
+            TransactionReceipt receipt = mainContract.executeTemperatureOperation(
+                deviceAddress,
+                BigInteger.valueOf(operationType),
+                temperature,
+                timestamp
+            ).send();
+
+            BigInteger gasUsado = receipt.getGasUsed();
+            contadorRelays++;
+            metricas.registrarLeituraMainchain(deviceAddress, gasUsado);
+
+            List<EdgechainMain.CriticalAlertEventResponse> alertas =
+                mainContract.getCriticalAlertEvents(receipt);
+            boolean alertaCritico = false;
+            for (EdgechainMain.CriticalAlertEventResponse a : alertas) {
+                alertaCritico = true;
+                contadorCriticos++;
+                System.out.println(">>> MAINCHAIN: ALERTA CRITICO device=" + a.device + " temp=" + a.temperature);
+            }
+
+            try {
+                reguladorRelay.updateExecutionCost(deviceAddress, true, gasUsado).send();
+            } catch (Exception e) {
+                System.err.println("Relayer: falha ao atualizar custo na sidechain: " + e.getMessage());
+            }
+
+            return alertaCritico;
+
+        } catch (Exception e) {
+            System.err.println("Relayer: falha ao encaminhar para a mainchain: " + e.getMessage());
+            return false;
+        }
+    }
+
     public void iniciarSincronizacao() {
-        System.out.println("\n=== Iniciando Sincronização (SIDE CHAIN → MAIN CHAIN) a cada " + intervaloSincronizacao + "s ===\n");
-        
+        System.out.println("\n=== Monitor do RELAYER (SIDE CHAIN -> MAIN CHAIN) a cada " + intervaloSincronizacao + "s ===\n");
+
         schedulerSincronizacao.scheduleAtFixedRate(() -> {
             try {
-                sincronizarComMainChain();
+                System.out.println("\n>>> STATUS RELAYER <<<");
+                System.out.println("Transacoes na sidechain: " + contadorTransacoes);
+                System.out.println("Operacoes encaminhadas a mainchain: " + contadorRelays);
+                System.out.println("Alertas criticos na mainchain: " + contadorCriticos);
             } catch (Exception e) {
-                System.err.println("✗ Erro na sincronização: " + e.getMessage());
+                System.err.println("✗ Erro no monitor do relayer: " + e.getMessage());
             }
         }, intervaloSincronizacao, intervaloSincronizacao, TimeUnit.SECONDS);
     }
 
-    private void sincronizarComMainChain() throws Exception {
-        // Gerar hash do estado atual da side chain
-        String stateHash = gerarHashEstadoSideChain();
-        
-        System.out.println("\n>>> SINCRONIZAÇÃO INICIADA <<<");
-        System.out.println("Sincronizando side chain -> main chain");
-        System.out.println("State Hash: " + stateHash.substring(0, 16) + "...");
-        System.out.println("Transações pendentes: " + contadorTransacoes);
-        
-        try {
-            // Obter altura do bloco da side chain
-            long blockHeight = sideChainWeb3j.ethBlockNumber().send().getBlockNumber().longValue();
-           
-            byte[] stateHashBytes = Numeric.hexStringToByteArray(stateHash);
-            if (stateHashBytes.length < 32) {
-                byte[] padded = new byte[32];
-                System.arraycopy(stateHashBytes, 0, padded, 32 - stateHashBytes.length, stateHashBytes.length);
-                stateHashBytes = padded;
-            }
-
-            long transacoes = Math.max(1, contadorTransacoes);
-
-            // Submeter batch no bridge
-            TransactionReceipt receipt = bridgeContract.submeterBatch(
-                stateHashBytes,
-                BigInteger.valueOf(blockHeight),
-                BigInteger.valueOf(transacoes)
-            ).send();
-            
-            System.out.println("  Batch ancorado com sucesso!");
-            System.out.println("  TX Hash: " + receipt.getTransactionHash().substring(0, 10) + "...");
-            System.out.println("  Block: " + receipt.getBlockNumber());
-            System.out.println("  Gas Used: " + receipt.getGasUsed());
-            
-        } catch (Exception e) {
-            System.err.println("Erro ao submeter batch: " + e.getMessage());
-        }
-        
-        contadorBatches++;
-        contadorTransacoes = 0;
-        
-        System.out.println(">>> SINCRONIZAÇÃO CONCLUÍDA <<<");
-        System.out.println("Total de sincronizações: " + contadorBatches + "\n");
-    }
-
-    private String gerarHashEstadoSideChain() throws Exception {
-        try {
-            // Obter número do bloco atual da side chain
-            BigInteger blockNumber = sideChainWeb3j.ethBlockNumber().send().getBlockNumber();
-            String blockHash = sideChainWeb3j.ethGetBlockByNumber(
-                org.web3j.protocol.core.DefaultBlockParameter.valueOf(blockNumber),
-                false
-            ).send().getBlock().getHash();
-            
-            return blockHash != null ? blockHash : "0x" + System.currentTimeMillis();
-        } catch (Exception e) {
-            return "0x" + System.nanoTime();
-        }
-    }
-
-    public void registrarTransacao() {
-        contadorTransacoes++;
-    }
+    public void registrarTransacao() { contadorTransacoes++; }
 
     public void exibirEstatisticas() {
         System.out.println("\n" + "=".repeat(60));
-        System.out.println("ESTATÍSTICAS DO GERENCIADOR");
+        System.out.println("ESTATÍSTICAS DO GERENCIADOR (DUALCHAIN)");
         System.out.println("=".repeat(60));
         System.out.println("Total de Transações (Side Chain): " + contadorTransacoes);
-        System.out.println("Total de Anchors (Main Chain): " + contadorBatches);
+        System.out.println("Operações encaminhadas (Main Chain): " + contadorRelays);
+        System.out.println("Alertas críticos (Main Chain): " + contadorCriticos);
         System.out.println("Dispositivos Ativos: " + dispositivos.size());
         System.out.println("=".repeat(60) + "\n");
+
+        exibirRelatorioMetricas();
     }
+
+    public void exibirRelatorioMetricas() { metricas.imprimirRelatorio(); }
 }

@@ -2,20 +2,16 @@ import org.web3j.crypto.Credentials;
 
 public class MultiIoTBlockchain {
     public static void main(String[] args) {
-        // Configuração
-
-        // URLs das duas chains
-        String sideChainRpcUrl = "http://127.0.0.1:8545";    // Side chain
         String mainChainRpcUrl = "http://127.0.0.1:7545";    // Main chain
+        String sideChainRpcUrl = "http://127.0.0.1:8545";    // Side chain
         
-        String sideChainContratoAddr = "0x50f14485A899331a3449CD3e7d9FD6ea19A63712"; // EdgeChain contract
-        String mainChainContratoAddr = "0x0c87F874d740D5791DB2297C1E83Ea40F4072164"; // Bridge contract
+        String mainChainContratoAddr = "0x194F10d43D96320B100f5183fab2Eb991364Dc96"; // EdgechainMain contract
+        String sideChainContratoAddr = "0x96fBc62fE5A67Db7Dea4Bb9e3E90AC92F7010234"; // EdgechainRegulator contract
         
-        long intervaloOperacoes = 2000; // 2s entre operações dos dispositivos
         long intervaloSincronizacao = 20;      // 20s entre synchronizações com main chain
-        long duracao = 60;              // Executar por 60s
+        long duracao = 300;              // Executar por 60s
 
-        Credentials credenciaiBridge = Credentials.create("0x417d4fc5b9152250cce14bad2ff8019fde5ffe3f943ad99117b2a7372602af35");
+        Credentials credenciaiMainchain = Credentials.create("0x6d92d14af23dd28a110b32464e0d9fa50a4d1fe7dc763bb5bc68ffb457bb006b");
         
         // Iniciar gerenciador
         GerenciadorDispositivos gerenciador = new GerenciadorDispositivos(
@@ -23,10 +19,13 @@ public class MultiIoTBlockchain {
             mainChainRpcUrl,
             sideChainContratoAddr,
             mainChainContratoAddr,
-            intervaloOperacoes,
             intervaloSincronizacao,
-            credenciaiBridge
+            credenciaiMainchain
         );
+        // Financia o REGULADOR (sidechain) ANTES de iniciar: agora ele paga a recompensa
+        // via transfer (paridade com a singlechain), e o payout reverteria sem saldo.
+        gerenciador.financiarContrato();
+
         gerenciador.iniciarDispositivos();
         gerenciador.iniciarSincronizacao();
         

@@ -3,15 +3,27 @@ import org.web3j.protocol.core.methods.response.TransactionReceipt;
 import org.web3j.crypto.Credentials;
 
 import java.math.BigInteger;
+import java.util.List;
 import java.util.Random;
 
-public class DispositivoIoT implements Runnable{
-    
+/**
+ * Dispositivo IoT (sensor de temperatura) na arquitetura DUALCHAIN.
+ *
+ * Fluxo (ver DUALCHAIN.md):
+ *   Sensor -> EdgechainRegulator (SIDECHAIN) -> [relayer] -> EdgechainMain (MAINCHAIN)
+ *
+ * O dispositivo NAO fala mais diretamente com o contrato de negocio: ele envia
+ * suas leituras SEMPRE para o contrato regulador da sidechain, que valida o
+ * comportamento e decide se a operacao segue para a mainchain.
+ */
+public class DispositivoIoT implements Runnable {
+
     // Configurações do Dispositivo
     private int dispositivoId;
     private Web3j web3j;
-    private EdgeChain contrato;
+    private EdgechainRegulator regulador;   // contrato da SIDECHAIN
     private Credentials credenciais;
+    private String deviceType = "temperature";
     private boolean ativo;
 
     // Configurações de Sensor
@@ -21,26 +33,38 @@ public class DispositivoIoT implements Runnable{
     private long intervaloLeituraMs; // ms entre leituras
     private Random random;
 
-    // Limiares de Alerta
-    private static final double LIMITE_CRITICO_ALTO = 80.0;
+    // Limiares de Alerta (o limite critico definitivo (>45) e checado na mainchain)
+    private static final double LIMITE_CRITICO_ALTO = 45.0;
     private static final double LIMITE_CRITICO_BAIXO = -10.0;
-    private static final double LIMITE_AVISO = 75.0;
-    
+    private static final double LIMITE_AVISO = 40.0;
+
     // Estatísticas
     private int totalLeituras;
     private int totalAlertas;
-    private int totalSincronizacoes;
-    private long ultimaSincronizacao;
+    private int totalAprovadas;
+    private int totalRejeitadas;
     private GerenciadorDispositivos gerenciador;
 
-    public DispositivoIoT(int dispositivoId, Web3j web3j, Credentials credenciais, String contratoAddr, long intervaloLeituraMs, GerenciadorDispositivos gerenciador) {
+    // Comportamento anormal (demonstracao da deteccao/bloqueio da sidechain)
+    private boolean malicioso;                    // se true, envia uma rajada de leituras
+    private boolean rajadaEnviada = false;        // controla envio unico da rajada
+    private boolean bloqueadoTemporariamente = false; // estado observado de bloqueio temporario
+    // Rajada com TIMESTAMP CONGELADO (todas no mesmo instante). A sidechain agora
+    // detecta flood por INTERVALO: leituras empilhadas no mesmo instante acima de
+    // BURST_LIMIT(=50) sao anormais. 150 leituras garantem a deteccao/bloqueio,
+    // enquanto o dispositivo normal (timestamp avancando) NUNCA e penalizado.
+    private static final int TAMANHO_RAJADA = 150;
+
+    public DispositivoIoT(int dispositivoId, Web3j web3j, Credentials credenciais, String contratoAddr, long intervaloLeituraMs, GerenciadorDispositivos gerenciador, boolean malicioso) {
         this.dispositivoId = dispositivoId;
         this.credenciais = credenciais;
         this.web3j = web3j;
-        this.intervaloLeituraMs = intervaloLeituraMs;
-        this.contrato = EdgeChain.load(contratoAddr, web3j, credenciais, 
-            BigInteger.valueOf(20_000_000_000L), 
-            BigInteger.valueOf(300_000));
+        this.malicioso = malicioso;
+        //this.intervaloLeituraMs = intervaloLeituraMs;
+        // Carrega o contrato REGULADOR (sidechain) -- ponto de entrada de todas as leituras.
+        this.regulador = EdgechainRegulator.load(contratoAddr, web3j, credenciais,
+            BigInteger.valueOf(20_000_000_000L),
+            BigInteger.valueOf(500_000));
         this.gerenciador = gerenciador;
 
         this.random = new Random();
@@ -49,24 +73,23 @@ public class DispositivoIoT implements Runnable{
         this.variacaoMaxima = 0.5;
         this.totalLeituras = 0;
         this.totalAlertas = 0;
-        this.totalSincronizacoes = 0;
-        this.ultimaSincronizacao = System.currentTimeMillis();
+        this.totalAprovadas = 0;
+        this.totalRejeitadas = 0;
     }
 
     @Override
     public void run() {
         ativo = true;
         System.out.println("[Dispositivo " + dispositivoId + "]: iniciado ");
-        
+
         try {
-    
             int operationCount = 0;
 
             while (ativo) {
                 execucaoCicloDispositivo();
 
-                Thread.sleep(intervaloLeituraMs + ((long)(random.nextDouble() * intervaloLeituraMs * 0.2 - intervaloLeituraMs * 0.1))); // ±10% de variação no intervalo
-                
+                //Thread.sleep(intervaloLeituraMs + ((long)(random.nextDouble() * intervaloLeituraMs * 0.2 - intervaloLeituraMs * 0.1))); // ±10% de variação no intervalo
+
                 operationCount++;
                 System.out.println("[Dispositivo " + dispositivoId + "]: " + "Operação #" + operationCount + " concluída");
             }
@@ -86,110 +109,163 @@ public class DispositivoIoT implements Runnable{
         System.out.println("=".repeat(60));
         System.out.println("Total de Leituras: " + totalLeituras);
         System.out.println("Total de Alertas: " + totalAlertas);
-        System.out.println("Total de Sincronizações: " + totalSincronizacoes);
+        System.out.println("Leituras Aprovadas (Sidechain): " + totalAprovadas);
+        System.out.println("Leituras Rejeitadas (Sidechain): " + totalRejeitadas);
+        System.out.println("Perfil: " + (malicioso ? "MALICIOSO" : "normal") + (bloqueadoTemporariamente ? " (bloqueado)" : ""));
         System.out.println("Temperatura Atual: " + String.format("%.2f°C", temperaturaAtual));
         System.out.println("=".repeat(60) + "\n");
     }
 
     private void execucaoCicloDispositivo() throws Exception {
-
         // 1. Simula sensor
         lerTemperatura();
-        
-        // 2. OPERAÇÕES PRÁTICAS (Ciclo normal de IoT)
-        // 2.1. PING/Heartbeat - Verificar conectividade (grátis)
-        if (totalLeituras % 2 == 0) realizarPing();
-        
-        // 2.2. SINCRONIZAÇÃO - Verificar versão do firmware (grátis)
-        if (totalLeituras % 5 == 0) sincronizarComBlokcchain();
-        
-        // 2.3. ATUALIZAÇÃO - Atualizar versão se necessário (transação)
-        if (totalLeituras % 15 == 0) atualizarFirmware();
-        
-        // 2.4. HISTÓRICO - Consultar contador de operações (grátis)
-        if (totalLeituras % 10 == 0) consultarHistorico();
 
-        // 3. VERIFICAÇÃO DE ALERTAS
+        // 2. Envia a leitura para o REGULADOR (sidechain).
+        if (malicioso && !rajadaEnviada) {
+            // Dispositivo malicioso: dispara uma rajada para exceder o limite de taxa
+            // da sidechain e ser penalizado/bloqueado (demonstra os passos 5 e 12).
+            enviarRajadaMaliciosa();
+            rajadaEnviada = true;
+        } else {
+            // Operacao central da dualchain: validacao + reputacao + encaminhamento.
+            enviarLeituraRegulador(0); // operationType 0 = leitura periodica
+        }
+
+        // 3. Alertas locais (registro/observabilidade no dispositivo)
         verificarAlertas();
-        
     }
 
     private void lerTemperatura() {
         // Variação natural de temperatura (movimento browniano)
         double variacao = (random.nextDouble() - 0.5) * 2 * variacaoMaxima;
         temperaturaAtual += variacao;
-        
+
         // Tendência periódica (simulando ciclos naturais)
         long cicloSegundos = (System.currentTimeMillis() / 1000) % 3600;
         double tendencia = Math.sin((cicloSegundos / 3600.0) * 2 * Math.PI) * 2;
         temperaturaAtual += tendencia * 0.01;
-        
+
         // Limitar flutuações extremas
         temperaturaAtual = Math.max(-50, Math.min(150, temperaturaAtual));
-        
+
         totalLeituras++;
-        
-        System.out.println("[Dispositivo " + dispositivoId + "]: " + "Leitura "+ totalLeituras +" - Temperatura: "+ temperaturaAtual +"°C");
+
+        System.out.println("[Dispositivo " + dispositivoId + "]: " + "Leitura " + totalLeituras + " - Temperatura: " + temperaturaAtual + "°C");
     }
 
-    private void realizarPing() throws Exception {
+    /**
+     * Envia a leitura para o contrato REGULADOR (sidechain) e trata o resultado.
+     *
+     *  - Cadastro automatico e validacao acontecem dentro do contrato.
+     *  - Se APROVADA, encaminha a operacao para a MAINCHAIN via relayer (gerenciador).
+     *  - Se o dispositivo for bloqueado ou receber ordem de desligamento, para.
+     */
+    private void enviarLeituraRegulador(long operationType) throws Exception {
         try {
-            BigInteger version = contrato.getVersion().send();
-            System.out.println("[Dispositivo " + dispositivoId + "]: Ping enviado - Versão EdgeChain: " + version);
-        } catch (Exception e) {
-            System.out.println("[Dispositivo " + dispositivoId + "]: Falha no ping: " + e.getMessage());
-        }
-    }
+            BigInteger temperatura = BigInteger.valueOf((long) Math.round(temperaturaAtual));
+            BigInteger timestamp = BigInteger.valueOf(System.currentTimeMillis() / 1000);
+            String deviceId = "sensor-" + dispositivoId;
 
-    private void sincronizarComBlokcchain() throws Exception {
-        try {
-            // Obter versão atual (verificação leve no contrato)
-            BigInteger version = contrato.getVersion().send();
-            System.out.println("[Dispositivo " + dispositivoId + "]: Heartbeat enviado. Versão do contrato: " + version);
-            
-            totalSincronizacoes++;
-            ultimaSincronizacao = System.currentTimeMillis();
-            
-        } catch (Exception e) {
-            System.out.println("[Dispositivo " + dispositivoId + "]: Erro na sincronização: " + e.getMessage());
-        }
-    }
+            // --- SIDECHAIN: valida e registra a leitura ---
+            TransactionReceipt receipt = regulador.registerTemperatureReading(
+                deviceId,
+                deviceType,
+                BigInteger.valueOf(operationType),
+                temperatura,
+                timestamp
+            ).send();
 
-    private void atualizarFirmware() throws Exception {
-        try {
-            BigInteger versaoAtual = contrato.getVersion().send();
-            BigInteger novaVersao = BigInteger.valueOf(5).max(versaoAtual.add(BigInteger.ONE));
-            
-            System.out.println("[Dispositivo " + dispositivoId + "]: Atualizando versão de " + versaoAtual + " para " + novaVersao);
-            
-            TransactionReceipt result = contrato.changeVersion(novaVersao).send();
-            
-            if (result.equals(BigInteger.ZERO)) {
-                System.out.println("[Dispositivo " + dispositivoId + "]: Versão atualizada com sucesso para " + novaVersao);
-            } else if (result.equals(BigInteger.ONE)) {
-                System.out.println("[Dispositivo " + dispositivoId + "]: Versão deve ser >= 5 (retorno: 1)");
-            } else {
-                System.out.println("[Dispositivo " + dispositivoId + "]: Erro na atualização (retorno: " + result + ")");
+            gerenciador.registrarTransacao(); // metrica de TPS (tx enviada a sidechain)
+            gerenciador.getMetricas().registrarLeituraSidechain(credenciais.getAddress(), receipt.getGasUsed()); // metrica: gas/latencia/TPS sidechain
+
+            // Le o evento ReadingValidated para saber se foi aprovada.
+            List<EdgechainRegulator.ReadingValidatedEventResponse> eventos =
+                regulador.getReadingValidatedEvents(receipt);
+
+            boolean aprovada = false;
+            for (EdgechainRegulator.ReadingValidatedEventResponse ev : eventos) {
+                aprovada = ev.approved;
+                if (ev.approved) {
+                    totalAprovadas++;
+                    System.out.println("[Dispositivo " + dispositivoId + "]: Leitura APROVADA pela sidechain (gas sidechain: " + receipt.getGasUsed() + ")");
+                } else {
+                    totalRejeitadas++;
+                    System.out.println("[Dispositivo " + dispositivoId + "]: Leitura REJEITADA pela sidechain");
+                }
             }
-            
-            gerenciador.registrarTransacao();
+
+            // Bloqueio TEMPORARIO: o dispositivo NAO para -- registra o estado e continua.
+            // As leituras seguintes sao rejeitadas ate a reabilitacao pela sidechain.
+            List<EdgechainRegulator.DeviceBlockedEventResponse> bloqueios =
+                regulador.getDeviceBlockedEvents(receipt);
+            if (!bloqueios.isEmpty()) {
+                bloqueadoTemporariamente = true;
+                System.out.println("[Dispositivo " + dispositivoId + "]: BLOQUEADO TEMPORARIAMENTE pela sidechain. Leituras serao rejeitadas ate a reabilitacao.");
+                return; // nao encaminha a mainchain nesta leitura
+            }
+
+            // Reabilitacao: se estava bloqueado e voltou a ser aprovado (ou emitiu
+            // DeviceUnblocked), limpa o estado de bloqueio.
+            if (bloqueadoTemporariamente
+                    && (aprovada || !regulador.getDeviceUnblockedEvents(receipt).isEmpty())) {
+                bloqueadoTemporariamente = false;
+                System.out.println("[Dispositivo " + dispositivoId + "]: REABILITADO pela sidechain. Voltando a operar normalmente.");
+            }
+
+            // --- MAINCHAIN: encaminha a operacao aprovada (via relayer) ---
+            if (aprovada) {
+                // A mainchain sinaliza temperatura critica. NAO desligamos mais o
+                // dispositivo: apenas REGISTRAMOS o alerta e seguimos operando.
+                boolean alertaCritico = gerenciador.encaminharParaMainchain(
+                    credenciais.getAddress(), operationType, temperatura, timestamp);
+                if (alertaCritico) {
+                    totalAlertas++;
+                    System.out.println("[Dispositivo " + dispositivoId + "]: MAINCHAIN sinalizou ALERTA CRITICO (temperatura critica). Alerta registrado; dispositivo continua operando.");
+                }
+            }
         } catch (Exception e) {
-            System.out.println("[Dispositivo " + dispositivoId + "]: Erro na atualização: " + e.getMessage());
+            System.out.println("[Dispositivo " + dispositivoId + "]: Erro ao enviar leitura ao regulador: " + e.getMessage());
         }
     }
 
-    private void consultarHistorico() throws Exception {
-        try {
-            BigInteger balance = contrato.getUserBalance().send();
-            System.out.println("[Dispositivo " + dispositivoId + "]: Saldo da conta: " + balance + " wei");
-        } catch (Exception e) {
-            System.out.println("[Dispositivo " + dispositivoId + "]: Erro ao consultar saldo: " + e.getMessage());
+    /**
+     * Dispositivo malicioso: envia uma RAJADA de leituras com o mesmo timestamp,
+     * concentrando-as na mesma janela de avaliacao da sidechain para exceder o
+     * limite de taxa (MAX_PER_WINDOW) e provocar penalidade -> bloqueio temporario.
+     * Demonstra os passos 5 (rejeicao/penalidade) e 12 (bloqueio) da dualchain.
+     * Envia apenas a sidechain (nao encaminha a mainchain) para focar na deteccao.
+     */
+    private void enviarRajadaMaliciosa() {
+        System.out.println("[Dispositivo " + dispositivoId + "]: (MALICIOSO) enviando rajada de " + TAMANHO_RAJADA + " leituras para exceder o limite da sidechain...");
+        String deviceId = "sensor-" + dispositivoId;
+        BigInteger timestamp = BigInteger.valueOf(System.currentTimeMillis() / 1000);
+        BigInteger temperatura = BigInteger.valueOf((long) Math.round(temperaturaAtual));
+
+        for (int i = 0; i < TAMANHO_RAJADA && ativo; i++) {
+            try {
+                TransactionReceipt receipt = regulador.registerTemperatureReading(
+                    deviceId, deviceType, BigInteger.ZERO, temperatura, timestamp
+                ).send();
+
+                gerenciador.registrarTransacao();
+                gerenciador.getMetricas().registrarLeituraSidechain(credenciais.getAddress(), receipt.getGasUsed());
+
+                if (!regulador.getDeviceBlockedEvents(receipt).isEmpty()) {
+                    bloqueadoTemporariamente = true;
+                    totalRejeitadas++;
+                    System.out.println("[Dispositivo " + dispositivoId + "]: (MALICIOSO) BLOQUEADO TEMPORARIAMENTE pela sidechain apos " + (i + 1) + " leituras.");
+                    break;
+                }
+            } catch (Exception e) {
+                System.out.println("[Dispositivo " + dispositivoId + "]: (MALICIOSO) erro na rajada: " + e.getMessage());
+                break;
+            }
         }
     }
 
-    private void verificarAlertas() throws Exception {
+    private void verificarAlertas() {
         String tipoAlerta = null;
-        
+
         if (temperaturaAtual > LIMITE_CRITICO_ALTO) {
             tipoAlerta = "CRÍTICO ALTO";
         } else if (temperaturaAtual < LIMITE_CRITICO_BAIXO) {
@@ -197,24 +273,10 @@ public class DispositivoIoT implements Runnable{
         } else if (temperaturaAtual > LIMITE_AVISO) {
             tipoAlerta = "AVISO";
         }
-        
-        if (tipoAlerta != null) {
-            enviarAlerta(tipoAlerta);
-        }
-    }
 
-    private void enviarAlerta(String tipoAlerta) throws Exception {
-        try {
-            System.out.println("[Dispositivo " + dispositivoId + "]: ALERTA " + tipoAlerta + " detectado! Temp: " + String.format("%.2f°C", temperaturaAtual));
-            TransactionReceipt gasUsado = contrato.any_operation(contrato.getVersion().send()).send();
-            
-            System.out.println("[Dispositivo " + dispositivoId + "]: Alerta registrado no EdgeChain - Gas usado: " + gasUsado);
-            
-            gerenciador.registrarTransacao();
+        if (tipoAlerta != null) {
             totalAlertas++;
-            
-        } catch (Exception e) {
-            System.out.println("[Dispositivo " + dispositivoId + "]: Falha ao enviar alerta: " + e.getMessage());
+            System.out.println("[Dispositivo " + dispositivoId + "]: ALERTA " + tipoAlerta + " detectado! Temp: " + String.format("%.2f°C", temperaturaAtual));
         }
     }
 
@@ -226,15 +288,15 @@ public class DispositivoIoT implements Runnable{
     public int getDispositivoId() {
         return dispositivoId;
     }
-    
+
     public double getTemperaturaAtual() {
         return temperaturaAtual;
     }
-    
+
     public int getTotalLeituras() {
         return totalLeituras;
     }
-    
+
     public int getTotalAlertas() {
         return totalAlertas;
     }
