@@ -5,13 +5,13 @@ public class MultiIoTBlockchain {
         String mainChainRpcUrl = "http://127.0.0.1:7545";    // Main chain
         String sideChainRpcUrl = "http://127.0.0.1:8545";    // Side chain
         
-        String mainChainContratoAddr = "0x194F10d43D96320B100f5183fab2Eb991364Dc96"; // EdgechainMain contract
-        String sideChainContratoAddr = "0x96fBc62fE5A67Db7Dea4Bb9e3E90AC92F7010234"; // EdgechainRegulator contract
+        String mainChainContratoAddr = "0x28d46cB0d6870Ec385dc8D99E52514D861717370"; // EdgechainMain contract
+        String sideChainContratoAddr = "0x359146E53e8B20E434937713d46564b408fC6762"; // EdgechainRegulator contract
         
         long intervaloSincronizacao = 20;      // 20s entre synchronizações com main chain
         long duracao = 300;              // Executar por 60s
 
-        Credentials credenciaiMainchain = Credentials.create("0x6d92d14af23dd28a110b32464e0d9fa50a4d1fe7dc763bb5bc68ffb457bb006b");
+        Credentials credenciaiMainchain = Credentials.create("0x4195f3e1b109d46754f60c81bdb62c884074016b1f37065103b376310df8b527");
         
         // Iniciar gerenciador
         GerenciadorDispositivos gerenciador = new GerenciadorDispositivos(
@@ -25,6 +25,13 @@ public class MultiIoTBlockchain {
         // Financia o REGULADOR (sidechain) ANTES de iniciar: agora ele paga a recompensa
         // via transfer (paridade com a singlechain), e o payout reverteria sem saldo.
         gerenciador.financiarContrato();
+
+        // Gatilhos de AGREGACAO/FILTRAGEM (facilmente configuraveis):
+        //   loteMin            = 50 leituras consolidadas por envio a mainchain;
+        //   deltaSignificativo = 5 C de variacao dispara envio;
+        //   limiteCritico      = 45 C (alinhado a EdgechainMain) dispara envio imediato.
+        // O gatilho por TEMPO reutiliza intervaloSincronizacao (acima).
+        gerenciador.configurarBatch(50, 5, 45);
 
         gerenciador.iniciarDispositivos();
         gerenciador.iniciarSincronizacao();

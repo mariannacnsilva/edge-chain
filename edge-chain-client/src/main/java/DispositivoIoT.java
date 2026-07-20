@@ -6,16 +6,6 @@ import java.math.BigInteger;
 import java.util.List;
 import java.util.Random;
 
-/**
- * Dispositivo IoT (sensor de temperatura) na arquitetura DUALCHAIN.
- *
- * Fluxo (ver DUALCHAIN.md):
- *   Sensor -> EdgechainRegulator (SIDECHAIN) -> [relayer] -> EdgechainMain (MAINCHAIN)
- *
- * O dispositivo NAO fala mais diretamente com o contrato de negocio: ele envia
- * suas leituras SEMPRE para o contrato regulador da sidechain, que valida o
- * comportamento e decide se a operacao segue para a mainchain.
- */
 public class DispositivoIoT implements Runnable {
 
     // Configurações do Dispositivo
@@ -45,23 +35,16 @@ public class DispositivoIoT implements Runnable {
     private int totalRejeitadas;
     private GerenciadorDispositivos gerenciador;
 
-    // Comportamento anormal (demonstracao da deteccao/bloqueio da sidechain)
-    private boolean malicioso;                    // se true, envia uma rajada de leituras
-    private boolean rajadaEnviada = false;        // controla envio unico da rajada
+    private boolean malicioso;  // se true, envia uma rajada de leituras
+    private boolean rajadaEnviada = false; // controla envio unico da rajada
     private boolean bloqueadoTemporariamente = false; // estado observado de bloqueio temporario
-    // Rajada com TIMESTAMP CONGELADO (todas no mesmo instante). A sidechain agora
-    // detecta flood por INTERVALO: leituras empilhadas no mesmo instante acima de
-    // BURST_LIMIT(=50) sao anormais. 150 leituras garantem a deteccao/bloqueio,
-    // enquanto o dispositivo normal (timestamp avancando) NUNCA e penalizado.
     private static final int TAMANHO_RAJADA = 150;
 
-    public DispositivoIoT(int dispositivoId, Web3j web3j, Credentials credenciais, String contratoAddr, long intervaloLeituraMs, GerenciadorDispositivos gerenciador, boolean malicioso) {
+    public DispositivoIoT(int dispositivoId, Web3j web3j, Credentials credenciais, String contratoAddr, GerenciadorDispositivos gerenciador, boolean malicioso) {
         this.dispositivoId = dispositivoId;
         this.credenciais = credenciais;
         this.web3j = web3j;
         this.malicioso = malicioso;
-        //this.intervaloLeituraMs = intervaloLeituraMs;
-        // Carrega o contrato REGULADOR (sidechain) -- ponto de entrada de todas as leituras.
         this.regulador = EdgechainRegulator.load(contratoAddr, web3j, credenciais,
             BigInteger.valueOf(20_000_000_000L),
             BigInteger.valueOf(500_000));
@@ -87,9 +70,6 @@ public class DispositivoIoT implements Runnable {
 
             while (ativo) {
                 execucaoCicloDispositivo();
-
-                //Thread.sleep(intervaloLeituraMs + ((long)(random.nextDouble() * intervaloLeituraMs * 0.2 - intervaloLeituraMs * 0.1))); // ±10% de variação no intervalo
-
                 operationCount++;
                 System.out.println("[Dispositivo " + dispositivoId + "]: " + "Operação #" + operationCount + " concluída");
             }
@@ -153,13 +133,6 @@ public class DispositivoIoT implements Runnable {
         System.out.println("[Dispositivo " + dispositivoId + "]: " + "Leitura " + totalLeituras + " - Temperatura: " + temperaturaAtual + "°C");
     }
 
-    /**
-     * Envia a leitura para o contrato REGULADOR (sidechain) e trata o resultado.
-     *
-     *  - Cadastro automatico e validacao acontecem dentro do contrato.
-     *  - Se APROVADA, encaminha a operacao para a MAINCHAIN via relayer (gerenciador).
-     *  - Se o dispositivo for bloqueado ou receber ordem de desligamento, para.
-     */
     private void enviarLeituraRegulador(long operationType) throws Exception {
         try {
             BigInteger temperatura = BigInteger.valueOf((long) Math.round(temperaturaAtual));
@@ -228,13 +201,6 @@ public class DispositivoIoT implements Runnable {
         }
     }
 
-    /**
-     * Dispositivo malicioso: envia uma RAJADA de leituras com o mesmo timestamp,
-     * concentrando-as na mesma janela de avaliacao da sidechain para exceder o
-     * limite de taxa (MAX_PER_WINDOW) e provocar penalidade -> bloqueio temporario.
-     * Demonstra os passos 5 (rejeicao/penalidade) e 12 (bloqueio) da dualchain.
-     * Envia apenas a sidechain (nao encaminha a mainchain) para focar na deteccao.
-     */
     private void enviarRajadaMaliciosa() {
         System.out.println("[Dispositivo " + dispositivoId + "]: (MALICIOSO) enviando rajada de " + TAMANHO_RAJADA + " leituras para exceder o limite da sidechain...");
         String deviceId = "sensor-" + dispositivoId;
