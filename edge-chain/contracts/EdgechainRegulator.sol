@@ -93,6 +93,9 @@ contract EdgechainRegulator {
         uint    lastTemperature;    // ultima temperatura registrada
         uint    tempSum;            // soma das temperaturas (media = tempSum / transactionCount)
         uint    firstTimestamp;     // primeira leitura (frequencia = count / (last - first))
+        // --- rastreabilidade de LOTES (Edge Node com hash SHA-256) ---
+        bytes32 lastBatchHash;      // hash do ultimo lote validado (auditoria)
+        uint    batchCount;         // quantidade de lotes recebidos deste dispositivo
     }
 
     mapping(address => Device) private devices;
@@ -123,6 +126,15 @@ contract EdgechainRegulator {
     event DeviceUnblocked(address indexed device);
     // Mantido na ABI por compatibilidade, mas NAO emitido no caminho quente.
     event RewardUpdated(address indexed device, uint256 reward, uint256 reputation, uint256 penaltyLevel);
+
+    // LOTE (Edge Node): resumo do batch validado + hash SHA-256 (rastreabilidade).
+    event BatchValidated(
+        address indexed device,
+        bytes32 batchHash,
+        uint256 readingCount,
+        uint256 avgTemperature,
+        bool approved
+    );
 
     constructor() {
         owner = msg.sender;
@@ -264,6 +276,137 @@ contract EdgechainRegulator {
     }
 
     /**
+     * ------------------------------------------------------------------------
+     * PONTO DE ENTRADA EM LOTE (Edge Node) -- NOVO FLUXO BATCH.
+     *
+     * Recebe apenas o RESUMO de um lote (hash SHA-256 + metadados) em vez de cada
+     * leitura individual. Executa EXATAMENTE a mesma logica de cadastro,
+     * comportamento, penalidade, reputacao, bloqueio e recompensa, porem UMA vez
+     * por lote (representando readingCount leituras). A lista completa de leituras
+     * permanece FORA da blockchain (no Edge Node); aqui so guardamos o hash.
+     *
+     * Retorna: (approved, gasUsed, reward). A criticidade e SEMPRE avaliada na
+     * mainchain (modo cross-chain), como no fluxo por leitura -- por isso nao e
+     * retornada aqui (a logica quebrada em helpers evita "stack too deep").
+     * ------------------------------------------------------------------------
+     */
+    function registerBatch(
+        string memory deviceId,
+        string memory deviceType,
+        bytes32 batchHash,
+        uint256 readingCount,
+        uint256 maxTemperature,
+        uint256 avgTemperature,
+        uint256 firstTimestamp,
+        uint256 lastTimestamp
+    )
+        public
+        returns (bool approved, uint256 gasUsed, uint256 reward)
+    {
+        uint256 startGas = gasleft();
+        totalReadings += readingCount; // o lote representa readingCount leituras
+
+        Device storage dev = devices[msg.sender];
+        _ensureRegistered(dev, deviceId, deviceType, firstTimestamp);
+
+        // Rastreabilidade do lote: apenas o HASH entra no estado da chain.
+        dev.lastBatchHash = batchHash;
+        dev.batchCount += 1;
+
+        // Bloqueio + comportamento + reputacao/penalidade (helper => evita stack too deep).
+        approved = _validateBatch(dev, readingCount, maxTemperature, avgTemperature, firstTimestamp, lastTimestamp);
+
+        // --- Custo da transacao + recompensa (sem transfer) ---
+        gasUsed = (startGas - gasleft()) + 21000;
+        if (approved) {
+            dev.accumulatedGas += gasUsed;
+        }
+        reward = _updateReward(dev);
+
+        // Um unico evento por LOTE (em vez de um por leitura). ReadingValidated e
+        // mantido para compatibilidade com os leitores Java existentes.
+        emit BatchValidated(msg.sender, batchHash, readingCount, avgTemperature, approved);
+        emit ReadingValidated(msg.sender, maxTemperature, lastTimestamp, approved, false, false);
+
+        return (approved, gasUsed, reward);
+    }
+
+    /** Cadastro automatico de dispositivo (extraido para reduzir a pilha). */
+    function _ensureRegistered(
+        Device storage dev,
+        string memory deviceId,
+        string memory deviceType,
+        uint256 firstTimestamp
+    ) private {
+        if (!dev.exists) {
+            dev.deviceId = deviceId;
+            dev.deviceAddress = msg.sender;
+            dev.deviceType = deviceType;
+            dev.reputation = REPUTATION_START;
+            dev.exists = true;
+            dev.firstTimestamp = firstTimestamp;
+            deviceList.push(msg.sender);
+            emit DeviceRegistered(msg.sender, deviceId, deviceType);
+        }
+    }
+
+    /**
+     * Nucleo da validacao de um LOTE: bloqueio temporario, estatisticas agregadas,
+     * deteccao de flood, penalidade/reputacao. Mesma logica do fluxo por leitura,
+     * porem aplicada de uma vez ao lote. Retorna se o lote foi aprovado.
+     */
+    function _validateBatch(
+        Device storage dev,
+        uint256 readingCount,
+        uint256 maxTemperature,
+        uint256 avgTemperature,
+        uint256 firstTimestamp,
+        uint256 lastTimestamp
+    ) private returns (bool) {
+        // --- Bloqueio TEMPORARIO ---
+        if (dev.blocked) {
+            if (lastTimestamp >= dev.blockedUntil) {
+                dev.blocked = false;
+                dev.penaltyLevel = MAX_PENALTY_LEVEL; // abaixo do limite de bloqueio (>5)
+                dev.lastTimestamp = lastTimestamp;    // reinicia a janela de avaliacao
+                dev.burstCount = 0;
+                emit DeviceUnblocked(msg.sender);
+            } else {
+                totalRejected += readingCount;
+                return false; // continua bloqueado: rejeita o lote
+            }
+        }
+
+        // --- Registro de comportamento + estatisticas agregadas (O(1)) ---
+        dev.transactionCount += readingCount;
+        dev.lastTemperature = maxTemperature;         // pior caso p/ criticidade na mainchain
+        dev.tempSum += avgTemperature * readingCount; // soma ~ media * quantidade
+
+        // --- Avaliacao de comportamento sobre o LOTE ---
+        if (_evaluateBatchBehavior(dev, readingCount, firstTimestamp, lastTimestamp)) {
+            // Flood: penaliza e REJEITA (nao encaminha a mainchain).
+            dev.penaltyLevel += 1;
+            dev.unsafeOperations += 1;
+            dev.reputation = dev.reputation >= 10 ? dev.reputation - 10 : 0;
+            if (dev.penaltyLevel > MAX_PENALTY_LEVEL) {
+                dev.blocked = true;
+                dev.blockedUntil = lastTimestamp + BLOCK_DURATION;
+                emit DeviceBlocked(msg.sender, dev.penaltyLevel);
+            }
+            totalRejected += readingCount;
+            return false;
+        }
+
+        // --- Comportamento normal: reabilita reputacao gradualmente ---
+        if (dev.penaltyLevel > 0) {
+            dev.penaltyLevel -= 1;
+        }
+        dev.reputation += 1;
+        totalApproved += readingCount;
+        return true;
+    }
+
+    /**
      * Modo CROSS-CHAIN: o relayer Java executa a mainchain, obtem o gas real e
      * reporta de volta aqui para atualizar accumulatedGas e a recompensa.
      * (Sem transfer -- apenas atualiza estado, como o resto do caminho quente.)
@@ -305,6 +448,33 @@ contract EdgechainRegulator {
         }
         // Timestamp NAO avancou: leituras empilhadas no mesmo instante (flood).
         dev.burstCount += 1;
+        return dev.burstCount > BURST_LIMIT;
+    }
+
+    // ----------------------------------------------------------------------
+    // Avaliacao de comportamento para LOTES (mesma filosofia do por-leitura).
+    //
+    // Um lote honesto cobre uma JANELA DE TEMPO (lastTimestamp > firstTimestamp):
+    // quando o tempo avanca, a rajada e zerada e a cadencia e considerada normal.
+    // Um atacante que dispara um flood concentra muitas leituras no MESMO instante:
+    // o lote chega com readingCount alto e firstTimestamp == lastTimestamp, fazendo
+    // burstCount ultrapassar BURST_LIMIT (comportamento anormal).
+    // ----------------------------------------------------------------------
+    function _evaluateBatchBehavior(
+        Device storage dev,
+        uint256 readingCount,
+        uint256 firstTimestamp,
+        uint256 lastTimestamp
+    ) private returns (bool) {
+        if (dev.lastTimestamp == 0 || lastTimestamp > dev.lastTimestamp) {
+            dev.lastTimestamp = lastTimestamp;
+            // Lote inteiro no mesmo instante => conta todas as leituras como rajada;
+            // lote que cobre uma janela de tempo => cadencia normal.
+            dev.burstCount = (lastTimestamp > firstTimestamp) ? 1 : readingCount;
+            return dev.burstCount > BURST_LIMIT;
+        }
+        // Lote no mesmo instante da janela anterior (flood continuado).
+        dev.burstCount += readingCount;
         return dev.burstCount > BURST_LIMIT;
     }
 
@@ -413,6 +583,16 @@ contract EdgechainRegulator {
 
     function getTotalDevices() public view returns (uint256) {
         return deviceList.length;
+    }
+
+    /** Rastreabilidade: hash do ultimo lote e quantidade de lotes do dispositivo. */
+    function getLastBatch(address device)
+        public
+        view
+        returns (bytes32 lastBatchHash, uint256 batchCount)
+    {
+        Device storage d = devices[device];
+        return (d.lastBatchHash, d.batchCount);
     }
 
     function getStats()

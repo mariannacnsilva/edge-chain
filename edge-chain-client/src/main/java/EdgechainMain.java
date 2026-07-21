@@ -11,6 +11,7 @@ import org.web3j.abi.datatypes.Address;
 import org.web3j.abi.datatypes.Bool;
 import org.web3j.abi.datatypes.Event;
 import org.web3j.abi.datatypes.Type;
+import org.web3j.abi.datatypes.generated.Bytes32;
 import org.web3j.abi.datatypes.generated.Uint256;
 import org.web3j.crypto.Credentials;
 import org.web3j.protocol.Web3j;
@@ -41,6 +42,8 @@ public class EdgechainMain extends Contract {
 
     public static final String FUNC_EXECUTETEMPERATUREOPERATION = "executeTemperatureOperation";
 
+    public static final String FUNC_REGISTERBATCHHASH = "registerBatchHash";
+
     public static final String FUNC_GETLASTEXECUTION = "getLastExecution";
 
     public static final String FUNC_GETTOTALOPERATIONS = "getTotalOperations";
@@ -61,8 +64,12 @@ public class EdgechainMain extends Contract {
             Arrays.<TypeReference<?>>asList(new TypeReference<Address>(true) {}, new TypeReference<Uint256>() {}, new TypeReference<Uint256>() {}, new TypeReference<Bool>() {}));
     ;
 
-    public static final Event TEMPERATUREPROCESSED_EVENT = new Event("TemperatureProcessed", 
+    public static final Event TEMPERATUREPROCESSED_EVENT = new Event("TemperatureProcessed",
             Arrays.<TypeReference<?>>asList(new TypeReference<Address>(true) {}, new TypeReference<Uint256>() {}, new TypeReference<Uint256>() {}, new TypeReference<Uint256>() {}, new TypeReference<Uint256>() {}));
+    ;
+
+    public static final Event BATCHREGISTERED_EVENT = new Event("BatchRegistered",
+            Arrays.<TypeReference<?>>asList(new TypeReference<Address>(true) {}, new TypeReference<Uint256>(true) {}, new TypeReference<Bytes32>() {}, new TypeReference<Uint256>() {}, new TypeReference<Uint256>() {}, new TypeReference<Bool>() {}));
     ;
 
     @Deprecated
@@ -184,6 +191,36 @@ public class EdgechainMain extends Contract {
                 new org.web3j.abi.datatypes.generated.Uint256(timestamp)), 
                 Collections.<TypeReference<?>>emptyList());
         return executeRemoteCallTransaction(function);
+    }
+
+    public RemoteCall<TransactionReceipt> registerBatchHash(String device, BigInteger batchId, byte[] batchHash, BigInteger timestamp, BigInteger maxTemperature, BigInteger readingCount) {
+        final org.web3j.abi.datatypes.Function function = new org.web3j.abi.datatypes.Function(
+                FUNC_REGISTERBATCHHASH,
+                Arrays.<Type>asList(new org.web3j.abi.datatypes.Address(device),
+                new org.web3j.abi.datatypes.generated.Uint256(batchId),
+                new org.web3j.abi.datatypes.generated.Bytes32(batchHash),
+                new org.web3j.abi.datatypes.generated.Uint256(timestamp),
+                new org.web3j.abi.datatypes.generated.Uint256(maxTemperature),
+                new org.web3j.abi.datatypes.generated.Uint256(readingCount)),
+                Collections.<TypeReference<?>>emptyList());
+        return executeRemoteCallTransaction(function);
+    }
+
+    public List<BatchRegisteredEventResponse> getBatchRegisteredEvents(TransactionReceipt transactionReceipt) {
+        List<Contract.EventValuesWithLog> valueList = extractEventParametersWithLog(BATCHREGISTERED_EVENT, transactionReceipt);
+        ArrayList<BatchRegisteredEventResponse> responses = new ArrayList<BatchRegisteredEventResponse>(valueList.size());
+        for (Contract.EventValuesWithLog eventValues : valueList) {
+            BatchRegisteredEventResponse typedResponse = new BatchRegisteredEventResponse();
+            typedResponse.log = eventValues.getLog();
+            typedResponse.device = (String) eventValues.getIndexedValues().get(0).getValue();
+            typedResponse.batchId = (BigInteger) eventValues.getIndexedValues().get(1).getValue();
+            typedResponse.batchHash = (byte[]) eventValues.getNonIndexedValues().get(0).getValue();
+            typedResponse.timestamp = (BigInteger) eventValues.getNonIndexedValues().get(1).getValue();
+            typedResponse.readingCount = (BigInteger) eventValues.getNonIndexedValues().get(2).getValue();
+            typedResponse.temperatureCritical = (Boolean) eventValues.getNonIndexedValues().get(3).getValue();
+            responses.add(typedResponse);
+        }
+        return responses;
     }
 
     public RemoteCall<TransactionReceipt> getLastExecution() {
@@ -310,5 +347,21 @@ public class EdgechainMain extends Contract {
         public BigInteger timestamp;
 
         public BigInteger gasUsed;
+    }
+
+    public static class BatchRegisteredEventResponse {
+        public Log log;
+
+        public String device;
+
+        public BigInteger batchId;
+
+        public byte[] batchHash;
+
+        public BigInteger timestamp;
+
+        public BigInteger readingCount;
+
+        public Boolean temperatureCritical;
     }
 }

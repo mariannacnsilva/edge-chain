@@ -12,6 +12,7 @@ import org.web3j.abi.datatypes.Bool;
 import org.web3j.abi.datatypes.Event;
 import org.web3j.abi.datatypes.Type;
 import org.web3j.abi.datatypes.Utf8String;
+import org.web3j.abi.datatypes.generated.Bytes32;
 import org.web3j.abi.datatypes.generated.Uint256;
 import org.web3j.crypto.Credentials;
 import org.web3j.protocol.Web3j;
@@ -56,6 +57,8 @@ public class EdgechainRegulator extends Contract {
 
     public static final String FUNC_REGISTERTEMPERATUREREADING = "registerTemperatureReading";
 
+    public static final String FUNC_REGISTERBATCH = "registerBatch";
+
     public static final String FUNC_SETMAINCHAINCONTRACT = "setMainchainContract";
 
     public static final String FUNC_TOTALAPPROVED = "totalApproved";
@@ -82,8 +85,12 @@ public class EdgechainRegulator extends Contract {
             Arrays.<TypeReference<?>>asList(new TypeReference<Address>(true) {}, new TypeReference<Uint256>() {}, new TypeReference<Uint256>() {}, new TypeReference<Bool>() {}, new TypeReference<Bool>() {}, new TypeReference<Bool>() {}));
     ;
 
-    public static final Event REWARDUPDATED_EVENT = new Event("RewardUpdated", 
+    public static final Event REWARDUPDATED_EVENT = new Event("RewardUpdated",
             Arrays.<TypeReference<?>>asList(new TypeReference<Address>(true) {}, new TypeReference<Uint256>() {}, new TypeReference<Uint256>() {}, new TypeReference<Uint256>() {}));
+    ;
+
+    public static final Event BATCHVALIDATED_EVENT = new Event("BatchValidated",
+            Arrays.<TypeReference<?>>asList(new TypeReference<Address>(true) {}, new TypeReference<Bytes32>() {}, new TypeReference<Uint256>() {}, new TypeReference<Uint256>() {}, new TypeReference<Bool>() {}));
     ;
 
     @Deprecated
@@ -281,6 +288,22 @@ public class EdgechainRegulator extends Contract {
         return rewardUpdatedEventFlowable(filter);
     }
 
+    public List<BatchValidatedEventResponse> getBatchValidatedEvents(TransactionReceipt transactionReceipt) {
+        List<Contract.EventValuesWithLog> valueList = extractEventParametersWithLog(BATCHVALIDATED_EVENT, transactionReceipt);
+        ArrayList<BatchValidatedEventResponse> responses = new ArrayList<BatchValidatedEventResponse>(valueList.size());
+        for (Contract.EventValuesWithLog eventValues : valueList) {
+            BatchValidatedEventResponse typedResponse = new BatchValidatedEventResponse();
+            typedResponse.log = eventValues.getLog();
+            typedResponse.device = (String) eventValues.getIndexedValues().get(0).getValue();
+            typedResponse.batchHash = (byte[]) eventValues.getNonIndexedValues().get(0).getValue();
+            typedResponse.readingCount = (BigInteger) eventValues.getNonIndexedValues().get(1).getValue();
+            typedResponse.avgTemperature = (BigInteger) eventValues.getNonIndexedValues().get(2).getValue();
+            typedResponse.approved = (Boolean) eventValues.getNonIndexedValues().get(3).getValue();
+            responses.add(typedResponse);
+        }
+        return responses;
+    }
+
     public RemoteCall<TransactionReceipt> calculateReward(String device) {
         final org.web3j.abi.datatypes.Function function = new org.web3j.abi.datatypes.Function(
                 FUNC_CALCULATEREWARD, 
@@ -362,6 +385,21 @@ public class EdgechainRegulator extends Contract {
                 new org.web3j.abi.datatypes.generated.Uint256(operationType), 
                 new org.web3j.abi.datatypes.generated.Uint256(temperature), 
                 new org.web3j.abi.datatypes.generated.Uint256(timestamp)), 
+                Collections.<TypeReference<?>>emptyList());
+        return executeRemoteCallTransaction(function);
+    }
+
+    public RemoteCall<TransactionReceipt> registerBatch(String deviceId, String deviceType, byte[] batchHash, BigInteger readingCount, BigInteger maxTemperature, BigInteger avgTemperature, BigInteger firstTimestamp, BigInteger lastTimestamp) {
+        final org.web3j.abi.datatypes.Function function = new org.web3j.abi.datatypes.Function(
+                FUNC_REGISTERBATCH,
+                Arrays.<Type>asList(new org.web3j.abi.datatypes.Utf8String(deviceId),
+                new org.web3j.abi.datatypes.Utf8String(deviceType),
+                new org.web3j.abi.datatypes.generated.Bytes32(batchHash),
+                new org.web3j.abi.datatypes.generated.Uint256(readingCount),
+                new org.web3j.abi.datatypes.generated.Uint256(maxTemperature),
+                new org.web3j.abi.datatypes.generated.Uint256(avgTemperature),
+                new org.web3j.abi.datatypes.generated.Uint256(firstTimestamp),
+                new org.web3j.abi.datatypes.generated.Uint256(lastTimestamp)),
                 Collections.<TypeReference<?>>emptyList());
         return executeRemoteCallTransaction(function);
     }
@@ -494,5 +532,19 @@ public class EdgechainRegulator extends Contract {
         public BigInteger reputation;
 
         public BigInteger penaltyLevel;
+    }
+
+    public static class BatchValidatedEventResponse {
+        public Log log;
+
+        public String device;
+
+        public byte[] batchHash;
+
+        public BigInteger readingCount;
+
+        public BigInteger avgTemperature;
+
+        public Boolean approved;
     }
 }

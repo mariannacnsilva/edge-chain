@@ -34,11 +34,11 @@ public class GerenciadorDispositivosSingle {
     }
 
     private static final String[] PRIVATE_KEYS = {
-        "0x01f7cf8fe564e02eb6f467a16a78203fe483c268a6f24e9563e1c658f21348f3", // Dispositivo 0
-        "0x04a39e26091fbc8facda4897455a4d4d024b7d9449ad1dcd1241708a6b72dcab", // Dispositivo 1
-        "0xac351f7db2e0589dfd0123889006a7d48686ca83c26666f95a6c90909534bd76", // Dispositivo 2
-        "0x3d910288629335bb5f943a329909055942f967553f1ab0958641c9442214f8d6", // Dispositivo 3
-        "0x94a6365c3e2278207cf6540d56d93c45793faa4a1abc7ad2e21b642c537d2c2d", // Dispositivo 4
+        "0x173dc2d5e094d78339016be94b5a2c513a95d6eb00b94dcb2af63dd99b600c22", // Dispositivo 0
+        "0x8b88dc9ca36ed57f1648dca77642064b26a429ffefb492da12598ebc3d693022", // Dispositivo 1
+        "0xd7c5fbbc003082633eab416aa1001e6cd4e0b4eea1075a159f551a981c1a9ead", // Dispositivo 2
+        "0x5e1436bb62c59f2102628e076a0db5a99484c979a3887bd52f0aa6f9a3368d6d", // Dispositivo 3
+        "0x5e1436bb62c59f2102628e076a0db5a99484c979a3887bd52f0aa6f9a3368d6d", // Dispositivo 4
     };
 
     public GerenciadorDispositivosSingle(String rpcUrl, String contratoAddr) {

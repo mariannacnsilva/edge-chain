@@ -5,7 +5,7 @@ public class SingleIoTBlockchain {
         // Configuração (mesmos defaults do MultiIoTBlockchain para comparacao justa)
 
         String rpcUrl = "http://127.0.0.1:9545";
-        String contratoAddr = "0xf92700A6a609d18F6D0fB96c56f86a01e49fd325"; // EdgeChain contract addr
+        String contratoAddr = "0x8085ee4CD0f0DC2D4A475E9566d4b7224A98c12a"; // EdgeChain contract addr
         long duracao = 300; // Executar por 300s
 
         // Iniciar gerenciador (singlechain)

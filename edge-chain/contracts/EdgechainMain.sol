@@ -49,6 +49,11 @@ contract EdgechainMain {
     uint256 public totalOperations;
     uint256 public totalCriticalAlerts;
 
+    // Rastreabilidade dos LOTES: registramos APENAS o hash + metadados (nunca as
+    // leituras individuais). batchId -> hash SHA-256 do lote aprovado.
+    mapping(uint256 => bytes32) public batchHashes;
+    uint256 public totalBatches;
+
     // Mantida na ABI (getLastExecution / lastExecution) por compatibilidade,
     // mas NAO e regravada no caminho quente (economia de gas).
     struct LastExecution {
@@ -76,6 +81,16 @@ contract EdgechainMain {
         uint256 temperature,
         uint256 timestamp,
         bool deviceShouldShutdown
+    );
+
+    // Registro de LOTE aprovado: apenas hash + metadados (sem leituras individuais).
+    event BatchRegistered(
+        address indexed device,
+        uint256 indexed batchId,
+        bytes32 batchHash,
+        uint256 timestamp,
+        uint256 readingCount,
+        bool temperatureCritical
     );
 
     modifier onlyRegulator() {
@@ -133,10 +148,62 @@ contract EdgechainMain {
         return (temperatureCritical, deviceShouldShutdown, gasUsed);
     }
 
+    /**
+     * NOVO FLUXO BATCH: registra na MAINCHAIN apenas o HASH de um lote aprovado +
+     * metadados (batchId, timestamp, quantidade de leituras, temperatura maxima).
+     * NAO grava as leituras individuais -- a lista completa permanece no Edge Node
+     * para auditoria. A criticidade e avaliada sobre a temperatura MAXIMA do lote,
+     * reutilizando exatamente a mesma politica de CRITICAL_TEMPERATURE.
+     *
+     * Retorna (temperatureCritical, deviceShouldShutdown, gasUsed).
+     */
+    function registerBatchHash(
+        address device,
+        uint256 batchId,
+        bytes32 batchHash,
+        uint256 timestamp,
+        uint256 maxTemperature,
+        uint256 readingCount
+    )
+        public
+        onlyRegulator
+        returns (bool temperatureCritical, bool deviceShouldShutdown, uint256 gasUsed)
+    {
+        uint256 startGas = gasleft();
+        totalOperations++;
+        totalBatches++;
+
+        // Rastreabilidade: somente o hash do lote entra no estado da mainchain.
+        batchHashes[batchId] = batchHash;
+
+        // --- Verificacao de temperatura critica (mesma politica de sempre) ---
+        if (maxTemperature > CRITICAL_TEMPERATURE) {
+            if (!criticalAlert) {
+                criticalAlert = true; // evita SSTORE redundante
+            }
+            temperatureCritical = true;
+            deviceShouldShutdown = true;
+            totalCriticalAlerts++;
+            emit CriticalAlert(device, maxTemperature, timestamp, true);
+        } else if (criticalAlert) {
+            criticalAlert = false; // evita SSTORE redundante
+        }
+
+        emit BatchRegistered(device, batchId, batchHash, timestamp, readingCount, temperatureCritical);
+
+        gasUsed = (startGas - gasleft()) + 21000;
+        return (temperatureCritical, deviceShouldShutdown, gasUsed);
+    }
+
     // --- Getters auxiliares (ABI preservada) ---
 
     function getTotalOperations() public view returns (uint256) {
         return totalOperations;
+    }
+
+    /** Rastreabilidade: hash registrado para um dado batchId. */
+    function getBatchHash(uint256 batchId) public view returns (bytes32) {
+        return batchHashes[batchId];
     }
 
     function getLastExecution()
